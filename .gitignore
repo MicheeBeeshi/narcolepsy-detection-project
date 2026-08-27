@@ -1,0 +1,20 @@
+# Data (PhysioNet files are large and shouldn't be committed)
+data/*.edf
+data/*.rec
+data/*.txt
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+venv/
+.venv/
+
+# OS
+.DS_Store
+
+# Outputs
+outputs/
+*.png
+!docs/*.png
