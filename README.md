@@ -1,8 +1,9 @@
 # REM-Onset Anomaly Detection in Narcolepsy
 
 Unsupervised anomaly detection for identifying abnormal REM-sleep-onset
-patterns in EEG, using narcolepsy as the clinical motivating case. Built
-in collaboration with Claude Code.
+patterns in EEG, using narcolepsy as the clinical motivating case. Also 
+includes future applications of this program. 
+Built with assistance from Claude Code.
 
 ## Problem
 
@@ -21,8 +22,8 @@ data)?
 
 Why? Because the abnormal brain activity that signals an impending
 narcoleptic episode differs from patient to patient. Ultimately, a
-patient-specific warning system -- one calibrated to each person's own
-baseline -- would be the ideal way to flag an individual's coming
+patient-specific warning system, one calibrated to each person's own
+baseline, would be the ideal way to flag an individual's coming
 episode. This project takes a first step toward that goal: it tests
 whether a population-level anomaly model (trained on healthy controls'
 "normal" pre-REM EEG) can meaningfully separate narcolepsy patients
@@ -51,7 +52,7 @@ drowsiness indicator in sleep EEG research.
 ## Dataset
 
 [CAP Sleep Database](https://physionet.org/content/capslpdb/1.0.0/) on
-PhysioNet -- free, no credentialing required. Includes full-night
+PhysioNet: free, no credentialing required. Includes full-night
 polysomnography (EEG, EOG, EMG) with expert-scored sleep stages for
 multiple subject groups, including narcolepsy patients and healthy
 controls.
@@ -68,8 +69,8 @@ for the token-based parser this required).
 #   data/n16.edf     data/n16.txt
 #   data/narco2.edf  data/narco2.txt
 ```
-Data files are not committed to this repo (see `.gitignore`) -- download
-them yourself from PhysioNet.
+Data files are not committed to this repo (see `.gitignore`) you can
+download them yourself from PhysioNet.
 
 ## Results
 
