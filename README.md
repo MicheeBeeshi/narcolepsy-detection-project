@@ -109,7 +109,7 @@ REM transitions (red dashed lines) for narco2 across a full night's
 recording, confirming the detected transitions land where the
 underlying EEG signal actually shows the expected pattern shifts.
 
-## Honest limitations
+## Limitations
 
 - **Very small sample size.** 3 controls and 2 narcolepsy patients is
   not enough to draw statistically valid conclusions. The clean score
