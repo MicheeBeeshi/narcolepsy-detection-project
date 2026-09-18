@@ -9,19 +9,22 @@ Download instructions are in the project README.
 
 Expected local layout (after downloading):
     data/
-        n1.edf          <- narcolepsy patient recordings
+        n1.edf          <- healthy control recordings (n1-n16)
         n1.txt          <- corresponding hypnogram / stage annotations
-        nfle1.edf       <- (other CAP groups you may add later)
+        narco1.edf      <- narcolepsy patient recordings (narco1-narco5)
+        narco1.txt
         ...
 
-CAP file naming convention: subject codes starting with 'n' are narcolepsy
-patients; healthy controls are typically labeled with a 'sc' prefix in the
-CAP database README on PhysioNet. Confirm exact prefixes against the
-dataset's own SUBJECTS file when you download it, since labeling
-conventions can vary by release.
+CAP naming convention (confirmed from physionet.org/content/capslpdb):
+    n1-n16        -> healthy controls (16 subjects)
+    narco1-narco5 -> narcolepsy patients (5 subjects)
+    brux*, ins*, nfle*, plm*, rbd*, sdb* -> other sleep-disorder groups,
+        not used in this project.
 """
 
+import re
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import mne
@@ -59,47 +62,130 @@ def list_available_recordings(data_dir: Path = DATA_DIR) -> list[str]:
 
 def infer_group(subject_id: str) -> str:
     """
-    Rough heuristic based on CAP naming convention. Double-check this
-    against the dataset's SUBJECTS documentation before trusting it for
-    real analysis -- naming conventions in CAP are not perfectly uniform.
+    Based on the official CAP Sleep Database naming convention
+    (physionet.org/content/capslpdb):
+        n1-n16       -> healthy controls (no pathology)
+        narco1-narco5 -> narcolepsy patients
+        brux*, ins*, nfle*, plm*, rbd*, sdb* -> other sleep-disorder groups,
+            not used by this project
     """
     sid = subject_id.lower()
-    if sid.startswith("n") and not sid.startswith("nfle"):
+    if sid.startswith("narco"):
         return "narcolepsy"
-    if sid.startswith("sc"):
+    if re.fullmatch(r"n\d+", sid):
         return "control"
     return "unknown"
 
 
+# Matches a REMlogic data row, e.g.:
+#   "W Unknown Position 22:35:17 SLEEP-S0 30 EOG"
+#   "S2 Left 23:14:02 SLEEP-S2 30 C4-A1"
+# Position can be one or more words, so it's matched lazily between the
+# sleep-stage code and the hh:mm:ss timestamp.
+# Matches a standalone hh:mm:ss (or hh.mm.ss) timestamp token, used to
+# locate the time field regardless of how many other columns precede it.
+# CAP .txt files are NOT perfectly consistent between subjects: some
+# (e.g. n16) include a "Position" column and colon-separated times, while
+# others (e.g. narco2) omit Position entirely and use dot-separated times.
+# Rather than assume a fixed column layout, we scan each line's
+# whitespace-separated tokens for the one that looks like a timestamp,
+# and treat everything after it as Event/Duration/Location -- this works
+# for both formats without needing per-subject special-casing.
+TIME_TOKEN_PATTERN = re.compile(r"^\d{1,2}[.:]\d{2}[.:]\d{2}$")
+
+
+def _parse_row(line: str):
+    """
+    Parse one data row using token-scanning (see TIME_TOKEN_PATTERN
+    comment above). Returns (stage_label, time_str, event, duration_sec)
+    or None if the line doesn't look like a data row (headers, blank
+    lines, metadata lines like "Patient:\tNARCO 2" all fail to match and
+    are skipped).
+    """
+    tokens = line.split()
+    if len(tokens) < 4:
+        return None
+
+    stage_label = tokens[0].upper()
+    if stage_label not in STAGE_MAP:
+        return None  # not a stage-labeled row (e.g. a header/metadata line)
+
+    time_idx = None
+    for i in range(1, len(tokens)):
+        if TIME_TOKEN_PATTERN.match(tokens[i]):
+            time_idx = i
+            break
+    if time_idx is None:
+        return None  # no timestamp found on this line
+
+    time_str = tokens[time_idx].replace(".", ":")  # normalize to hh:mm:ss
+    remainder = tokens[time_idx + 1:]
+    if len(remainder) < 2:
+        return None  # need at least Event and Duration after the time
+
+    event = remainder[0]
+    try:
+        duration_sec = float(remainder[1])
+    except ValueError:
+        return None
+
+    return stage_label, time_str, event, duration_sec
+
+
 def load_stage_annotations(txt_path: Path) -> pd.DataFrame:
     """
-    Parse CAP-format hypnogram text files into a tidy DataFrame.
+    Parse a CAP Sleep Database .txt score file (REMlogic export format)
+    into a tidy DataFrame of 30-second sleep-stage epochs.
 
-    NOTE: CAP annotation text files vary somewhat in format between
-    recordings. This parser assumes a simple whitespace-delimited format
-    with columns like: onset_time, duration, stage_label. You will likely
-    need to adjust this parser after inspecting a real downloaded file --
-    treat this as a starting point, not a finished parser.
+    Handles the two known column layouts seen across CAP subjects:
+        n16-style:    W  Unknown Position  22:35:17  SLEEP-S0  30  EOG
+        narco2-style: W  21.50.53  SLEEP-S0  30  ECG1-ECG2
+    (Position present vs. absent; colon vs. dot time separators.)
+    See _parse_row() / TIME_TOKEN_PATTERN for how both are handled.
+
+    Only rows whose Event starts with "SLEEP-" are kept -- these are the
+    30-second macrostructure epochs. Other event types (MCAP-A1/A2/A3 =
+    CAP microstructure, BUTTON = patient marker) are a different,
+    finer-grained annotation layer and are intentionally excluded here.
+
+    Times in the file are wall-clock (hh:mm:ss), not seconds-from-start,
+    and overnight recordings cross midnight. This function detects each
+    time rollover (time going "backwards") and adds a day, so onset_sec
+    is a continuously increasing offset from the first epoch.
     """
     rows = []
+    day_offset = 0
+    prev_time = None
+    base_time = None
+
     with open(txt_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
-            parts = line.strip().split()
-            if len(parts) < 3:
+            parsed = _parse_row(line.strip())
+            if parsed is None:
                 continue
-            onset, duration, label = parts[0], parts[1], parts[2]
-            try:
-                onset_sec = float(onset)
-                duration_sec = float(duration)
-            except ValueError:
-                continue  # skip header / malformed lines
-            stage_code = STAGE_MAP.get(label.upper(), -1)
-            rows.append((onset_sec, duration_sec, label.upper(), stage_code))
+            stage_label, time_str, event, duration_sec = parsed
 
-    df = pd.DataFrame(
+            if not event.upper().startswith("SLEEP-"):
+                continue  # skip CAP microstructure / button / other events
+
+            stage_code = STAGE_MAP.get(stage_label, -1)
+
+            t = datetime.strptime(time_str, "%H:%M:%S")
+            if base_time is None:
+                base_time = t
+                prev_time = t
+            if t < prev_time:
+                day_offset += 1  # crossed midnight
+            prev_time = t
+
+            absolute_time = t + timedelta(days=day_offset)
+            onset_sec = (absolute_time - base_time).total_seconds()
+
+            rows.append((onset_sec, duration_sec, stage_label, stage_code))
+
+    return pd.DataFrame(
         rows, columns=["onset_sec", "duration_sec", "stage_label", "stage_code"]
     )
-    return df
 
 
 def load_recording(subject_id: str, data_dir: Path = DATA_DIR) -> Recording:
